@@ -10,7 +10,26 @@ import Tkinter
 import socket
 from select import select
 import argparse
+import time
 
+def mb_checksum(s):
+    '''
+    Computes a checksum for s using even parity
+    '''
+    i = 1
+    l = len(s)
+    sout = ord(s[0])
+	
+    while (i<l):
+	    sout ^= ord(s[i]) 
+	    i+=1
+
+    return chr(sout)
+
+def mb_flip(seq):
+    if seq=='0':
+        return '1'
+    return '0'
 
 class MessageBoardNetwork(object):
     '''
@@ -20,73 +39,91 @@ class MessageBoardNetwork(object):
     respective methods, below) and return the message or
     response data back to the MessageBoardController class.
     '''
-    def __init__(self, host, port):
+    def __init__(self, host, port, retries, timeout):
         '''
         Constructor.  You should create a new socket
         here and do any other initialization.
         '''
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
-	self.host = host
-	self.port = port
+        self.host = host
+        self.port = port
+        self.seq = '0'
+        self.retries = retries
+        self.timeout = timeout
 
     def getMessages(self):
         '''
         You should make calls to get messages from the message 
         board server here.
         '''
-	print "getMessages called..."
-
-	# request messages from server
-	try:
-        	self.sock.sendto("AGET",(self.host, self.port))
-	except Exception as varname:
-		return "ERROR server get failed"
-
-	# wait for server response
-	(rlist, wlist, elist) = select([self.sock],[],[],0.1)
-	if len(rlist)>0:
-		(messages, serveraddr) = self.sock.recvfrom(1400)
-	else:
-		return "ERROR no response from server"
-
-	# return data
-	return messages[4:]
+        print "getMessages called..."
+        
+        # request messages from server
+        msgout = "C" + self.seq + mb_checksum("GET") + "GET"
+        try:
+        	self.sock.sendto(msgout, (self.host, self.port))
+        except Exception as varname:
+        	return "ERROR server get failed"
+        	
+        # wait for server response
+        tries = 0
+        while tries < self.timeout:
+            print "try " + str(tries) + "..."
+            (rlist, wlist, elist) = select([self.sock],[],[],self.timeout)
+            if len(rlist)>0:
+        	    (messages, serveraddr) = self.sock.recvfrom(1400)
+                break
+            tries += 1
+    	
+        # return data, update sequence number if successful
+        if tries >= self.timeout:
+            print "No response from server"
+            return "ERROR no response from server"
+        
+        self.seq = mb_flip(self.seq)
+        return messages
 
     def postMessage(self, user, message):
         '''
         You should make calls to post messages to the message 
         board server here.
         '''
-	print "postMessage called..."
+        print "postMessage called..."
+        
+        # check for errors
+        if len(user) > 8:
+        	return "ERROR username too long"
+        if len(message) > 60:
+        	return "ERROR message length too long"
+        if "::" in message:
+        	return "ERROR message contains reserved string, '::'"
+        print "No errors detected"
+        
+        # create message string
+        appdata = user + "::" + message
+        msgout = "C" + self.seq + mb_checksum(appdata) + appdata
+        
+        # send message to server and wait for response
+        try:
+        	self.sock.sendto(msgout, (self.host, self.port))
+        except Exception as varname:
+        	return "ERROR server send failed"
 
-	# check for errors
-	if len(user) > 8:
-		return "ERROR username too long"
-	if len(message) > 60:
-		return "ERROR message length too long"
-	if "::" in message:
-		return "ERROR message contains reserved string, '::'"
-	print "no errors detected"
+        tries = 0
+        while tries < self.timeout:
+            print "try " + str(tries) + "..."
+            (rlist, wlist, elist) = select([self.sock],[],[],self.timeout)
+            if len(rlist)>0:
+        	    (data, serveraddr) = self.sock.recvfrom(1400)
+                break
+            tries += 1
 
-	# create message string
-        msgout = "APOST " + user + "::" + message
-
-	# send message to server and wait for response
-	try:
-		self.sock.sendto(msgout, (self.host, self.port))
-	except Exception as varname:
-		return "ERROR server send failed"
-
-	(rlist, wlist, elist) = select([self.sock],[],[],0.1)
-	if len(rlist)>0:
-		(data, serveraddr) = self.sock.recvfrom(1400)
-	else:
-		return "ERROR no response from server"
-
-	if data[0:6]=="AERROR":
-		return data
-
-	return 1
+        # return success or failure, update sequence on success
+        if "ERROR" in data[0:8]:
+        	return data
+        
+        self.seq = mb_flip(self.seq)	
+        return '1'
 
 class MessageBoardController(object):
     '''
@@ -95,11 +132,11 @@ class MessageBoardController(object):
     to/from the server via the MessageBoardNetwork class.
     '''
 
-    def __init__(self, myname, host, port):
+    def __init__(self, myname, host, port, retries, timeout):
         self.name = myname
         self.view = MessageBoardView(myname)
         self.view.setMessageCallback(self.post_message_callback)
-        self.net = MessageBoardNetwork(host, port)
+        self.net = MessageBoardNetwork(host, port, retries, timeout)
 
     def run(self):
         self.view.after(1000, self.retrieve_messages)
@@ -112,18 +149,18 @@ class MessageBoardController(object):
         the message to the MessageBoardNetwork class via the
         postMessage method.
         '''
-	print "post_message_callback called..."
-
-	# call postMessage
+        print "post_message_callback called..."
+        
+        # call postMessage
         rval = self.net.postMessage(self.name, m)
-
-	# check for errors and update status bar
-	if rval==1:
-		# success!
-		self.view.setStatus("Message successfully posted")
-	else:
-		# failure :(
-		self.view.setStatus(rval)
+        
+        # check for errors and update status bar
+        if rval=='1':
+            # success!
+            self.view.setStatus("Message successfully posted")
+        else:
+            # failure :(
+            self.view.setStatus(rval)
 
     def retrieve_messages(self):
         '''
@@ -142,35 +179,37 @@ class MessageBoardController(object):
         which can be used to display any useful status information
         at the bottom of the GUI.
         '''
-	print "retrieve_messages called..."
+        print "retrieve_messages called..."
 
         self.view.after(1000, self.retrieve_messages)
         messagedata = self.net.getMessages()
+        print messagedata
 
-	# check for errors
-	if "ERROR" in messagedata[0:8]:
-		self.view.setStatus(messagedata)
-		return
+	    # check for errors
+        if "ERROR" in messagedata[0:8]:
+		    self.view.setStatus(messagedata)
+		    return
+        else:
+            messagedata = messagedata[4:]
 	
-	# reformat messages into a list of strings
-	messagedata = messagedata.split('::')
+	    # reformat messages into a list of strings
+        messagedata = messagedata.split('::')
 
-	messagelist = []
-	i = 0
-	l = len(messagedata)
-	print "# of messages received: " + str(l/3) + ", m%3: " + str(l%3)
+        messagelist = []
+        i = 0
+        l = len(messagedata)
+        print "# of messages received: " + str(l/3) + ", m%3: " + str(l%3)
 
-	if l%3 != 0:
-		self.view.setStatus("ERROR message data is corrupt")
-		return
+        if l%3 != 0:
+		    self.view.setStatus("ERROR message data is corrupt")
 
-	while i<=(l-3):
-		messagelist.append(messagedata[i] + " " + messagedata[i+1] + " " + messagedata[i+2])
-		i+=3
+        while i<=(l-3):
+		    messagelist.append(messagedata[i] + " " + messagedata[i+1] + " " + messagedata[i+2])
+		    i+=3
 	
-	# update UI
-	self.view.setListItems(messagelist)
-	self.view.setStatus("Retrieved " + str(len(messagelist)) + " messages")
+	    # update UI
+        self.view.setListItems(messagelist)
+        self.view.setStatus("Retrieved " + str(len(messagelist)) + " messages")
 		
 
 class MessageBoardView(Tkinter.Frame):
@@ -247,13 +286,17 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='COSC465 Message Board Client')
     parser.add_argument('--host', dest='host', type=str, default='localhost',
                         help='Set the host name for server to send requests to (default: localhost)')
-    parser.add_argument('--port', dest='port', type=int, default=1111,
-                        help='Set the port number for the server (default: 1111)')
+    parser.add_argument('--port', dest='port', type=int, default=3111,
+                        help='Set the port number for the server (default: 3111)')
+    parser.add_argument("--retries", dest='retries', type=int, default=10,
+                        help='Set the number of retransmissions in case of a timeout')
+    parser.add_argument("--timeout", dest='timeout', type=float, default=0.1,
+                        help='Set the RTO value')
     args = parser.parse_args()
 
     myname = raw_input("What is your user name (max 8 characters)? ")
 
-    app = MessageBoardController(myname, args.host, args.port)
+    app = MessageBoardController(myname, args.host, args.port, args.retries, args.timeout)
     app.run()
 
 
