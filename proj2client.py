@@ -10,7 +10,6 @@ import Tkinter
 import socket
 from select import select
 import argparse
-import time
 
 def mb_checksum(s):
     '''
@@ -27,6 +26,9 @@ def mb_checksum(s):
     return chr(sout)
 
 def mb_flip(seq):
+    '''
+    Flips the value of sequence
+    '''
     if seq=='0':
         return '1'
     return '0'
@@ -57,31 +59,42 @@ class MessageBoardNetwork(object):
         board server here.
         '''
         print "getMessages called..."
-        
-        # request messages from server
+
+        # create message string
         msgout = "C" + self.seq + mb_checksum("GET") + "GET"
-        try:
-        	self.sock.sendto(msgout, (self.host, self.port))
-        except Exception as varname:
-        	return "ERROR server get failed"
-        	
-        # wait for server response
+        print "  msgout: " + msgout
+        
         tries = 0
-        while tries < self.timeout:
-            print "try " + str(tries) + "..."
+        data = ""
+        while tries < self.retries:
+            print "  try " + str(tries)
+            
+            # request messages from server
+            try:
+            	self.sock.sendto(msgout, (self.host, self.port))
+            except Exception as varname:
+                print "  Socket sendto failed"
+            	return "ERROR socket sendto failed"
+        	
+            # wait for server response
             (rlist, wlist, elist) = select([self.sock],[],[],self.timeout)
             if len(rlist)>0:
-        	    (messages, serveraddr) = self.sock.recvfrom(1400)
-                break
+                print "  packet received"
+                (data, serveraddr) = self.sock.recvfrom(1400)
+                if data[2]==mb_checksum(data[3:]):
+                    print "  checksum matches"
+                    break
+
             tries += 1
-    	
+
         # return data, update sequence number if successful
-        if tries >= self.timeout:
-            print "No response from server"
+        if tries >= self.retries:
+            print "  No response from server"
             return "ERROR no response from server"
-        
+
+        print "  received: " + data[0:10] + "..., checksum=" + mb_checksum(data[3:])        
         self.seq = mb_flip(self.seq)
-        return messages
+        return data
 
     def postMessage(self, user, message):
         '''
@@ -97,31 +110,46 @@ class MessageBoardNetwork(object):
         	return "ERROR message length too long"
         if "::" in message:
         	return "ERROR message contains reserved string, '::'"
-        print "No errors detected"
-        
-        # create message string
-        appdata = user + "::" + message
-        msgout = "C" + self.seq + mb_checksum(appdata) + appdata
-        
-        # send message to server and wait for response
-        try:
-        	self.sock.sendto(msgout, (self.host, self.port))
-        except Exception as varname:
-        	return "ERROR server send failed"
+        print "  No errors detected"
 
+        # create message string
+        appdata = "POST " + user + "::" + message
+        msgout = "C" + self.seq + mb_checksum(appdata) + appdata
+        print "  msgout: " + msgout
+        
         tries = 0
-        while tries < self.timeout:
-            print "try " + str(tries) + "..."
+        data = ""
+        while tries < self.retries:
+            print "  try " + str(tries)
+            
+            # send message to server
+            try:
+            	self.sock.sendto(msgout, (self.host, self.port))
+            except Exception as varname:
+                print "  Socket sendto failed"
+            	return "ERROR socket sendto failed"
+            
+            # wait for server response
             (rlist, wlist, elist) = select([self.sock],[],[],self.timeout)
             if len(rlist)>0:
-        	    (data, serveraddr) = self.sock.recvfrom(1400)
-                break
+                print "  packet received"
+                (data, serveraddr) = self.sock.recvfrom(1400)
+                if data[2]==mb_checksum(data[3:]):
+                    print "  checksum matches"
+                    break
+            
             tries += 1
 
         # return success or failure, update sequence on success
-        if "ERROR" in data[0:8]:
-        	return data
-        
+        if tries >= self.retries:
+            print "  No response from server"
+            return "ERROR no response from server"
+
+        if "ERROR" in data:
+            print "  Failed to post"
+            return "ERROR failed to post message"
+
+        print "  received: " + data + ", checksum=" + mb_checksum(data[3:])        
         self.seq = mb_flip(self.seq)	
         return '1'
 
@@ -156,10 +184,8 @@ class MessageBoardController(object):
         
         # check for errors and update status bar
         if rval=='1':
-            # success!
             self.view.setStatus("Message successfully posted")
         else:
-            # failure :(
             self.view.setStatus(rval)
 
     def retrieve_messages(self):
@@ -180,34 +206,30 @@ class MessageBoardController(object):
         at the bottom of the GUI.
         '''
         print "retrieve_messages called..."
-
+    
         self.view.after(1000, self.retrieve_messages)
         messagedata = self.net.getMessages()
-        print messagedata
-
+    
 	    # check for errors
         if "ERROR" in messagedata[0:8]:
-		    self.view.setStatus(messagedata)
-		    return
+            self.view.setStatus(messagedata)
+            return
         else:
-            messagedata = messagedata[4:]
+            messagedata = messagedata[6:]
 	
-	    # reformat messages into a list of strings
-        messagedata = messagedata.split('::')
-
+        # reformat messages into a list of strings
+        messagedata = (messagedata.strip()).split('::')
+    
         messagelist = []
         i = 0
         l = len(messagedata)
-        print "# of messages received: " + str(l/3) + ", m%3: " + str(l%3)
-
-        if l%3 != 0:
-		    self.view.setStatus("ERROR message data is corrupt")
-
+        print "  # of messages received: " + str(l/3) + ", m%3: " + str(l%3)
+    
         while i<=(l-3):
-		    messagelist.append(messagedata[i] + " " + messagedata[i+1] + " " + messagedata[i+2])
-		    i+=3
-	
-	    # update UI
+            messagelist.append(messagedata[i] + " " + messagedata[i+1] + " " + messagedata[i+2])
+            i+=3
+    
+        # update UI
         self.view.setListItems(messagelist)
         self.view.setStatus("Retrieved " + str(len(messagelist)) + " messages")
 		
