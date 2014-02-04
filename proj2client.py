@@ -25,6 +25,26 @@ def mb_checksum(s):
 
     return chr(sout)
 
+def mb_send(msgout, host, port, sock):
+    try:
+        sock.sendto(msgout, (host, port))
+    except Exception as varname:
+        print "  Socket sendto failed"
+       	return 0
+    return 1
+
+def mb_receive(sock, timeout, seq):
+    (rlist, wlist, elist) = select([sock],[],[],timeout)
+    if len(rlist)>0:
+        print "  packet received"
+        (data, serveraddr) = sock.recvfrom(1400)
+        if data[1]==seq:
+            print "  sequence # matches"
+            if data[2]==mb_checksum(data[3:]):
+                print "  checksum matches"
+                return data
+    return 0
+
 def mb_flip(seq):
     '''
     Flips the value of sequence
@@ -70,22 +90,13 @@ class MessageBoardNetwork(object):
             print "  try " + str(tries)
             
             # request messages from server
-            try:
-            	self.sock.sendto(msgout, (self.host, self.port))
-            except Exception as varname:
-                print "  Socket sendto failed"
-            	return "ERROR socket sendto failed"
+            if mb_send(msgout, self.host, self.port, self.sock) != 1:
+                return "ERROR socket sendto failed"
         	
             # wait for server response
-            (rlist, wlist, elist) = select([self.sock],[],[],self.timeout)
-            if len(rlist)>0:
-                print "  packet received"
-                (data, serveraddr) = self.sock.recvfrom(1400)
-                if data[1]==self.seq:
-                    print "  sequence # matches"
-                    if data[2]==mb_checksum(data[3:]):
-                        print "  checksum matches"
-                        break
+            data = mb_receive(self.sock, self.timeout, self.seq)
+            if data != 0:
+                break
 
             tries += 1
 
@@ -125,22 +136,13 @@ class MessageBoardNetwork(object):
             print "  try " + str(tries)
             
             # send message to server
-            try:
-            	self.sock.sendto(msgout, (self.host, self.port))
-            except Exception as varname:
-                print "  Socket sendto failed"
-            	return "ERROR socket sendto failed"
+            if mb_send(msgout, self.host, self.port, self.sock) != 1:
+                return "ERROR socket sendto failed"
             
             # wait for server response
-            (rlist, wlist, elist) = select([self.sock],[],[],self.timeout)
-            if len(rlist)>0:
-                print "  packet received"
-                (data, serveraddr) = self.sock.recvfrom(1400)
-                if data[1]==self.seq:
-                    print "  sequence # matches"
-                    if data[2]==mb_checksum(data[3:]):
-                        print "  checksum matches"
-                        break
+            data = mb_receive(self.sock, self.timeout, self.seq)
+            if data != 0:
+                break
             
             tries += 1
 
