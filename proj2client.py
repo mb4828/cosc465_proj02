@@ -81,9 +81,11 @@ class MessageBoardNetwork(object):
             if len(rlist)>0:
                 print "  packet received"
                 (data, serveraddr) = self.sock.recvfrom(1400)
-                if data[2]==mb_checksum(data[3:]):
-                    print "  checksum matches"
-                    break
+                if data[1]==self.seq:
+                    print "  sequence # matches"
+                    if data[2]==mb_checksum(data[3:]):
+                        print "  checksum matches"
+                        break
 
             tries += 1
 
@@ -134,9 +136,11 @@ class MessageBoardNetwork(object):
             if len(rlist)>0:
                 print "  packet received"
                 (data, serveraddr) = self.sock.recvfrom(1400)
-                if data[2]==mb_checksum(data[3:]):
-                    print "  checksum matches"
-                    break
+                if data[1]==self.seq:
+                    print "  sequence # matches"
+                    if data[2]==mb_checksum(data[3:]):
+                        print "  checksum matches"
+                        break
             
             tries += 1
 
